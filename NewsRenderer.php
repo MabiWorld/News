@@ -33,7 +33,9 @@ class NewsRenderer {
 
 	public $changelist;
 
+	public $recents;
 	public $namespaces;
+	public $wikiforum;
 	public $categories;
 	public $types;
 
@@ -133,19 +135,34 @@ class NewsRenderer {
 		if ( $this->unique === 'false' || $this->unique === 'no' || $this->unique === '0' )
 			$this->unique = false;
 
+		$this->recents = @$argv['recents'];
+		if ( $this->recents === 'false' || $this->recents === 'no' || $this->recents === '0' )
+			$this->recents = false;
+		else
+			$this->recents = true;
+		
+
 		$this->namespaces = @$argv['namespaces'];
+		$this->wikiforum = array();
 		if ( !is_null( $this->namespaces ) ) {
 			$this->namespaces = preg_split('!\s*(\|\s*)+!', trim( $this->namespaces ) );
 
 			foreach ($this->namespaces as $i => $ns) {
-				$ns = $wgContLang->lc($ns);
+				$nsl = $wgContLang->lc($ns);
 
-				if ( $ns === '-' || $ns === '0' || $ns === 'main' || $ns === 'article' ) {
+				if ( $nsl === '-' || $nsl === '0' || $nsl === 'main' || $nsl === 'article' ) {
 					$this->namespaces[$i] = 0;
+				} else if ( strpos( $ns, '/' ) !== false ) {
+					// This is a special "namespace"
+					$parts = explode( '/', $ns );
+					if ( $parts[0] == 'wf' ) {
+						array_push( $this->wikiforum, $parts[1] );
+					}
+					$this->namespaces[$i] = false;
 				} else {
-					$this->namespaces[$i] = MWNamespace::getCanonicalIndex( $ns );
+					$this->namespaces[$i] = MWNamespace::getCanonicalIndex( $nsl );
 					if ( $this->namespaces[$i] === false || $this->namespaces[$i] === null )
-						$this->namespaces[$i] = $wgContLang->getNsIndex( $ns );
+						$this->namespaces[$i] = $wgContLang->getNsIndex( $nsl );
 				}
 
 				if ( $this->namespaces[$i] === false || $this->namespaces[$i] === null )
@@ -272,10 +289,57 @@ class NewsRenderer {
 		return $res;
 	}
 
+	function queryWikiForum( $limit ) {
+		$filters = array(
+			'category_ids' => array(),
+			'categories' => array()
+		);
+
+		foreach( $this->wikiforum as $cat ) {
+			if ( $cat[0] == '#' ) {
+				array_push( $filters['category_ids'], intval( substr( $cat, 1 ) ) );
+			} else {
+				array_push( $filters['categories'], $cat );
+			}
+		}
+
+		if ( ! $filters['categories'] ) unset($filters['categories']);
+
+		$filters['limit'] = $limit;
+
+		$res = WikiForumClass::getRecentPosts( $filters );
+		
+		$ret = array();
+		foreach( $res as $post ) {
+			array_push( $ret, (object) array(
+				'rc_namespace' => 'WikiForum',
+				'rc_title' => $post->getThread()->getName(),
+				'rc_timestamp' => $post->getPostedTimestamp(),
+				'rc_deleted' => false,
+				'rc_minor' => false,
+				'rc_bot' => false,
+				'rc_patrolled' => true,
+				'rc_user' => $post->getPostedById(),
+				'rc_type' => RC_NEW,
+				'rc_user_text' => $post->getPostedBy()->getName(),
+				'rc_old_len' => 0,
+				'rc_new_len' => strlen( $post->getText() ),
+				'rc_last_oldid' => 0,
+				'rc_this_oldid' => 0,
+				'rc_comment' => substr( $post->getText(), 0, 50 ),
+				'wf_pagename' => $post->getThread()->getURL( $post === $post->getThread() ? false : $post->getId(), true, true ),
+				'wf_content' => $post->getText()
+			) );
+		}
+
+		return $ret;
+	}
+
 	function fetchNews( ) {
 		$dbr = wfGetDB( DB_SLAVE );
 		$news = array();
 
+		if ( $this->recents ) {
 		$remaining = $this->limit;
 		$offset = 0;
 		$ignore = array(); #collect stuff we already have, when in unique mode
@@ -302,6 +366,23 @@ class NewsRenderer {
 			$dbr->freeResult( $res );
 
 			if ( !$has ) break; #empty result set, stop trying
+		}
+		}
+
+		if ( $this->wikiforum ) {
+			// TODO: Uniqueness for forums.
+			$res = $this->queryWikiForum( $this->limit );
+
+			foreach( $res as $post ) {
+				$news[] = $post;
+			}
+
+			// Sort these together and limit.
+			usort( $news, function ( $a, $b ) {
+				return strcmp($b->rc_timestamp, $a->rc_timestamp);
+			});
+
+			$news = array_slice( $news, 0, $this->limit );
 		}
 
 		return $news;
@@ -491,7 +572,7 @@ class NewsRenderer {
 			$params['title'] = $row->rc_title;
 
 			$title = $change->getTitle();
-			$params['pagename'] = $title->getPrefixedText();
+			$params['pagename'] = isset( $row->wf_pagename ) ? $row->wf_pagename : $title->getPrefixedText();
 
 			$params['minor'] = $row->rc_minor ? 'true' : '';
 			$params['bot'] = $row->rc_bot ? 'true' : '';
@@ -522,8 +603,12 @@ class NewsRenderer {
 			$params['comment'] = str_replace( array( '{{', '}}', '|', '\'' ), array( '&#123;&#123;', '&#125;&#125;', '&#124;', '$#39;' ), wfEscapeWikiText( $row->rc_comment ) );
 
 			if ( stripos($templatetext, '{{{content}}}')!==false || stripos($templatetext, '{{{head}}}')!==false ) {
-				$article = new Article( $title, $row->rc_this_oldid );
-				$articleText = ContentHandler::getContentText( $article->getPage()->getContent() );
+				if ( isset( $row->wf_content ) ) {
+					$articleText = $row->wf_content;
+				} else {
+					$article = new Article( $title, $row->rc_this_oldid );
+					$articleText = ContentHandler::getContentText( $article->getPage()->getContent() );
+				}
 
 				//TODO: expand variables & templates first, so cut-off applies to effective content,
 				//      and extension tags from templates are stripped properly
