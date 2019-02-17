@@ -23,9 +23,7 @@ $wgExtensionCredits['other'][] = array(
 	'descriptionmsg' => 'newsextension-desc',
 );
 
-$dir = dirname(__FILE__) . '/';
 $wgMessagesDirs['NewsExtension'] = __DIR__ . '/i18n';
-$wgExtensionMessagesFiles['NewsExtension'] = $dir . 'News.i18n.php';
 
 $wgNewsFeedURLPattern = false; // pattern for feed-URLs; useful when using rewrites for canonical feed URLs
 $wgNewsFeedUserPattern = false; // pattern to use for the author-field in feed items.

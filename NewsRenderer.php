@@ -51,22 +51,29 @@ class NewsRenderer {
 	public $pubtrigger; //word to use in summaries to trigger publication
 	public $permalinks; //wether to force permalinks in feeds, even in publication mode
 
+	/**
+	 * @param Article $article
+	 * @param Parser $parser
+	 * @return NewsRenderer|null
+	 * @throws MWException
+	 */
 	static function newFromArticle( $article, $parser ) {
-		$content = $article->getContentObject();
-		$text = ContentHandler::getContentText( $content );
-		if (!$text) return null;
+		$text = ContentHandler::getContentText( $article->getPage()->getContent() );
+		if (!$text) {
+			return null;
+		}
 
-		$uniq_prefix = "\x07NR-UNIQ";
 		$elements = array( 'nowiki', 'gallery', 'newsfeed');
 		$matches = array();
-		Parser::extractTagsAndParams( $elements, $text, $matches, $uniq_prefix );
+		Parser::extractTagsAndParams( $elements, $text, $matches );
 
 		foreach( $matches as $marker => $data ) {
 			list( $element, $content, $params, $tag ) = $data;
 			$tagName = strtolower( $element );
 
-			if ($tagName != 'newsfeed') continue;
-			#if (!is_null($id) && (!isset($params['id']) || $params['id'] != $id)) continue;
+			if ($tagName !== 'newsfeed') {
+				continue;
+			}
 
 			return new NewsRenderer( $article->getContext(), $content, $params, $parser );
 		}
@@ -264,7 +271,7 @@ class NewsRenderer {
 		if ( $this->nominor )  $where[] = 'rc_minor = 0';
 		if ( $this->nobot )  $where[] = 'rc_bot = 0';
 		if ( $this->noanon )  $where[] = 'rc_user > 0';
-		if ( $this->onlypatrolled )  $where[] = 'rc_patrolled = 1';
+		if ( $this->onlypatrolled )  $where[] = 'rc_patrolled != 0';
 		if ( $this->onlynew )  $where[] = 'rc_new = 1';
 		if ( $this->pubtrigger )  $where[] = 'rc_comment LIKE ' . $dbr->addQuotes( '%' . $this->pubtrigger . '%' );
 
@@ -848,7 +855,7 @@ class NewsFeedPage extends Article {
 		//      rendering of textual content
 		if ($wgUser->isAnon() && $usecache) {
 			$cachekey = $this->getCacheKey();
-			$ocache = wfGetParserCacheStorage();
+			$ocache = MediaWikiServices::getParserCache()->getCacheStorage();
 			$e = $ocache ? $ocache->get( $cachekey ) : null;
 			$note .= ' anon;';
 			$debug = $e ? "got cached" : "no cached";
