@@ -314,7 +314,7 @@ class NewsRenderer {
 
 		$filters['limit'] = $limit;
 
-		$res = WikiForumClass::getRecentPosts( $filters );
+		$res = WikiForum::getRecentPosts( $filters );
 		
 		$ret = array();
 		foreach( $res as $post ) {
