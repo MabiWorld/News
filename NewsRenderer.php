@@ -9,10 +9,8 @@
  * @licence GNU General Public Licence 2.0 or later
  */
 
-if( !defined( 'MEDIAWIKI' ) ) {
-	echo( "Not a valid entry point.\n" );
-	die( 1 );
-}
+use MediaWiki\MediaWikiServices;
+use Wikimedia\Rdbms\IDatabase;
 
 define('NEWS_HEAD_LENGTH', 1024 * 2);
 define('NEWS_HEAD_SCAN', 256);
@@ -82,7 +80,7 @@ class NewsRenderer {
 	}
 
 	function __construct( IContextSource $context, $templatetext, $argv, $parser ) {
-		global $wgContLang;
+		$contLang = MediaWikiServices::getInstance()->getContentLanguage();
 
 		$this->title = $context->getTitle();
 
@@ -109,8 +107,7 @@ class NewsRenderer {
 			$this->templateparser = $parser;
 			#$this->templateparser = clone $parser;
 			#$this->templateparser->setOutputType( Parser::OT_HTML );
-			$this->templateoptions = new ParserOptions;
-			$this->templateoptions->setEditSection( false );
+			$this->templateoptions = new ParserOptions( $context->getUser() );
 			$this->templateoptions->setNumberHeadings( false );
 			$this->templateoptions->setRemoveComments( true );
 			//$this->templateoptions->setUseDynamicDates( false ); // removed in mw 1.21
@@ -118,7 +115,7 @@ class NewsRenderer {
 			$this->templateoptions->setAllowSpecialInclusion( false );
 
 			#$this->templatetitle = Title::newFromText( $template, NS_TEMPLATE );
-			#$templatetext = $templateparser->fetchTemplate( $templatetitle );
+			#$templatetext = $templateparser->fetchTemplateAndTitle( $templatetitle )[0];
 			#print "<pre>$templatetext</pre>";
 
 			#$templateoptions->setRemoveComments( true );
@@ -154,8 +151,9 @@ class NewsRenderer {
 		if ( !is_null( $this->namespaces ) ) {
 			$this->namespaces = preg_split('!\s*(\|\s*)+!', trim( $this->namespaces ) );
 
+			$namespaceInfo = MediaWikiServices::getInstance()->getNamespaceInfo();
 			foreach ($this->namespaces as $i => $ns) {
-				$nsl = $wgContLang->lc($ns);
+				$nsl = $contLang->lc($ns);
 
 				if ( $nsl === '-' || $nsl === '0' || $nsl === 'main' || $nsl === 'article' ) {
 					$this->namespaces[$i] = 0;
@@ -167,9 +165,9 @@ class NewsRenderer {
 					}
 					$this->namespaces[$i] = false;
 				} else {
-					$this->namespaces[$i] = MWNamespace::getCanonicalIndex( $nsl );
+					$this->namespaces[$i] = $namespaceInfo->getCanonicalIndex( $nsl );
 					if ( $this->namespaces[$i] === false || $this->namespaces[$i] === null )
-						$this->namespaces[$i] = $wgContLang->getNsIndex( $nsl );
+						$this->namespaces[$i] = $contLang->getNsIndex( $nsl );
 				}
 
 				if ( $this->namespaces[$i] === false || $this->namespaces[$i] === null )
@@ -343,7 +341,7 @@ class NewsRenderer {
 	}
 
 	function fetchNews( ) {
-		$dbr = wfGetDB( DB_SLAVE );
+		$dbr = wfGetDB( DB_REPLICA );
 		$news = array();
 
 		if ( $this->recents ) {
@@ -357,7 +355,7 @@ class NewsRenderer {
 			$offset += $chunk;
 
 			$has = false;
-			while ( ( $remaining > 0 ) && ( $row = $dbr->fetchObject($res) ) ) {
+			while ( ( $remaining > 0 ) && ( $row = $res->fetchObject() ) ) {
 				$has = true;
 
 				if ( $this->unique && $row->rc_namespace >= 0 ) {
@@ -369,8 +367,6 @@ class NewsRenderer {
 				$news[] = $row;
 				$remaining -= 1;
 			}
-
-			$dbr->freeResult( $res );
 
 			if ( !$has ) break; #empty result set, stop trying
 		}
@@ -474,7 +470,7 @@ class NewsRenderer {
 	 * @return string
 	 */
 	function renderFeedItem( $item ) {
-		global $wgContLang;
+		$contLang = MediaWikiServices::getInstance()->getContentLanguage();
 
 		$html = '';
 		$html .= '<div class="newsfeed-item hentry">';
@@ -485,7 +481,7 @@ class NewsRenderer {
 		$html .= '<p><small>';
 		$html .= '<span class="author">' . $item->getAuthor() . '</span>';
 		$html .= ', ';
-		$html .= '<span class="published">' . $wgContLang->timeanddate( $item->getDate() ) . '</span>';
+		$html .= '<span class="published">' . $contLang->timeanddate( $item->getDate() ) . '</span>';
 		$html .= '</small></p>';
 
 		$html .= '</div>';
@@ -511,7 +507,7 @@ class NewsRenderer {
 
 		if ($standalone) {
 			$output = $this->templateparser->parse( $text, $GLOBALS['wgTitle'], $this->templateoptions, true );
-			$text = $output->mText;
+			$text = $output->getText( [ 'enableSectionEditLinks' => false ] );
 		}
 		else {  //FIXME: mask interwikis, categories, etc!!!!!!!!
 			$text = $this->templateparser->recursiveTagParse( $text );
@@ -557,7 +553,7 @@ class NewsRenderer {
 	}
 
 	function renderRow( $row, $forFeed = false ) {
-		global $wgUser, $wgLang;
+		global $wgLang;
 
 		$change = @RecentChange::newFromRow( $row );
 		$change->counter = 0; //hack
@@ -703,7 +699,12 @@ class NewsRenderer {
 
 		$ticon = $icon ? Title::newFromText($icon, NS_FILE) : null;
 		if ( $ticon ) {
-			$image = wfFindFile( $ticon );
+			if ( method_exists( MediaWikiServices::class, 'getRepoGroup' ) ) {
+				// MediaWiki 1.34+
+				$image = MediaWikiServices::getInstance()->getRepoGroup()->findFile( $ticon );
+			} else {
+				$image = wfFindFile( $ticon );
+			}
 			if ( !$image->exists() ) {
 				$image = false;
 			}
@@ -741,23 +742,14 @@ class NewsRenderer {
 	}
 
 	static function getLastChangeTime( ) {
-		$dbr = wfGetDB( DB_SLAVE );
-		list( $trecentchanges ) = $dbr->tableNamesN( 'recentchanges' );
-
-		$sql = 'select max(rc_timestamp) from ' . $trecentchanges;
-		$res = $dbr->query( $sql, 'NewsRenderer::getLastChangeTime' );
-		if (!$res) return false;
-
-		$row = $dbr->fetchRow($res);
-		if (!$row) return false;
-
-		return $row[0];
+		$dbr = wfGetDB( DB_REPLICA );
+		return $dbr->selectField( 'recentchanges', 'max(rc_timestamp)', IDatabase::ALL_ROWS, __METHOD__ );
 	}
 
 	static function sanitizeWikiText( $text, $parser = null ) {
-		if ( !$parser ) $parser = $GLOBALS['wgParser'];
+		if ( !$parser ) $parser = MediaWikiServices::getInstance()->getParser();
 
-		$elements = array_keys( $parser->mTagHooks );
+		$elements = $parser->getTags();
 		$uniq_prefix = "\x07NR-UNIQ";
 
 		$matches = array();
@@ -830,7 +822,7 @@ class NewsFeedPage extends Article {
 	}
 
 	function view( $usecache = true ) {
-		global $wgUser, $wgOut;
+		global $wgOut;
 
 		$fname = 'NewsFeedPage::view';
 		wfDebug("$fname: start\n");
@@ -851,11 +843,16 @@ class NewsFeedPage extends Article {
 			}
 		}
 
+		$user = $this->getContext()->getUser();
 		//NOTE: do caching for anon users only, because of user-specific
 		//      rendering of textual content
-		if ($wgUser->isAnon() && $usecache) {
+		if ($user->isAnon() && $usecache) {
 			$cachekey = $this->getCacheKey();
+<<<<<<< HEAD
 			$ocache = MediaWikiServices::getParserCache()->getCacheStorage();
+=======
+			$ocache = MediaWikiServices::getInstance()->getParserCache()->getCacheStorage();
+>>>>>>> origin/REL1_39
 			$e = $ocache ? $ocache->get( $cachekey ) : null;
 			$note .= ' anon;';
 			$debug = $e ? "got cached" : "no cached";
@@ -900,16 +897,16 @@ class NewsFeedPage extends Article {
 
 		//TODO: fetch actual news data and check the newest item. re-apply cache checks.
 		//      this would still save the cost of rendering if the data didn't change
-		global $wgParser; //evil global
+		$parser = MediaWikiServices::getInstance()->getParser();
 
-		$wgParser->startExternalParse( $this->mTitle, new ParserOptions, Parser::OT_HTML, true );
+		$parser->startExternalParse( $this->mTitle, new ParserOptions( $user ), Parser::OT_HTML, true );
 
 		//FIXME: an EXTREMELY ugly hack to force generation of absolute links.
 		//       this is needed because Title::getLocalUrl check wgRequest to see
 		//       if absolute urls are requested, instead of it being a parser option.
 		$_REQUEST['action'] = 'render';
 
-		$renderer = NewsRenderer::newFromArticle( $this, $wgParser );
+		$renderer = NewsRenderer::newFromArticle( $this, $parser );
 		if (!$renderer) {
 			wfDebug( "$fname: no feed found on page: " . $this->mTitle->getPrefixedText() . "\n" );
 			wfHttpError(404, "Not Found", "no feed found on page: " . $this->mTitle->getPrefixedText() ); //TODO: better code & text

@@ -47,17 +47,16 @@ function wfNewsSetHooks( $parser ) {
 function wfNewsTag( $templatetext, $argv, $parser ) {
     $context = RequestContext::getMain();
 
-    $parser->disableCache(); //TODO: use smart cache & purge...?
+    $parser->getOutput()->updateCacheExpiry( 0 ); //TODO: use smart cache & purge...?
     $renderer = new NewsRenderer($context, $templatetext, $argv, $parser);
 
     return $renderer->renderNews();
 }
 
 function wfNewsFeedTag( $templatetext, $argv, $parser ) {
-    global $wgOut;
-
-    $parser->disableCache(); //TODO: use smart cache & purge...?
-    $wgOut->setSyndicated( true );
+    $out = $parser->getOutput();
+    $out->updateCacheExpiry( 0 ); //TODO: use smart cache & purge...?
+    $out->setSyndicated( true );
 
     $silent = @$argv['silent'];
     if ( $silent === 'false' || $silent === 'no' || $silent === '0' )
@@ -76,19 +75,20 @@ function wfNewsFeedLinkTag( $linktext, $argv, $parser ) {
     return NewsRenderer::renderFeedLink($linktext, $argv, $parser);
 }
 
-function wfNewsArticleFromTitle( $title, &$article ) {
-    global $wgRequest, $wgFeedClasses, $wgUser, $wgOut;
+function wfNewsArticleFromTitle( $title, &$article, IContextSource $context ) {
+    global $wgFeedClasses;
     $fname = 'extension/News: wfNewsArticleFromTitle';
+    $request = $context->getRequest();
 
     $ns = $title->getNamespace();
     if ($ns < 0 || $ns == NS_SPECIAL || $ns == NS_MEDIAWIKI) return true;
 
-    $format = $wgRequest->getVal( 'feed' );
+    $format = $request->getVal( 'feed' );
     if (!$format) return true;
 
     $format = strtolower( trim($format) );
 
-    $action = strtolower( trim( $wgRequest->getVal( 'action', 'view' ) ) );
+    $action = strtolower( trim( $request->getVal( 'action', 'view' ) ) );
     if ($action != 'view' && $action != 'purge') return true;
 
     if ( !isset($wgFeedClasses[$format] ) ) {
@@ -120,7 +120,7 @@ function wfNewsSkinTemplateOutputPageBeforeExec( $skin, $tpl ) {
         $feeds[$format] = $e;
     }
 
-    $tpl->setRef( 'feeds', $feeds );
+    $tpl->set( 'feeds', $feeds );
     return true;
 }
 

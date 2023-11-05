@@ -1,7 +1,8 @@
 {
 	"@metadata": {
 		"authors": [
-			"Waldir"
+			"Waldir",
+			"Waldyrious"
 		]
 	},
 	"newsextension-desc": "Mostra mudanças recentes personalizadas numa página wiki ou como uma fonte RSS ou Atom"
