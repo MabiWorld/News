@@ -108,7 +108,7 @@ class NewsRenderer {
 			#$this->templateparser = clone $parser;
 			#$this->templateparser->setOutputType( Parser::OT_HTML );
 			$this->templateoptions = new ParserOptions( $context->getUser() );
-			$this->templateoptions->setNumberHeadings( false );
+			//$this->templateoptions->setNumberHeadings( false );
 			$this->templateoptions->setRemoveComments( true );
 			//$this->templateoptions->setUseDynamicDates( false ); // removed in mw 1.21
 			$this->templateoptions->setInterwikiMagic( true ); //strip interlanguage-links
@@ -250,13 +250,14 @@ class NewsRenderer {
 	*/
 
 	function query( $dbr, $limit, $offset = 0 ) {
-		list( $trecentchanges, $tpage, $tcategorylinks ) = $dbr->tableNamesN( 'recentchanges', 'page', 'categorylinks' );
+		list( $trecentchanges, $tpage, $tcategorylinks, $tactor ) = $dbr->tableNamesN( 'recentchanges', 'page', 'categorylinks', 'actor' );
 
 		$where = array();
 		$group = array();
-		$select = "$trecentchanges.*";
+		$select = "$trecentchanges.*, actor_name as rc_user_text, actor_user as rc_user";
 
 		$sql = "SELECT $select FROM $trecentchanges ";
+		$sql .= " JOIN $tactor ON actor_id = rc_actor ";
 
 		if ( $this->categories ) {
 			$sql .= " JOIN $tpage ON page_namespace = rc_namespace AND page_title = rc_title ";
@@ -268,10 +269,10 @@ class NewsRenderer {
 
 		if ( $this->nominor )  $where[] = 'rc_minor = 0';
 		if ( $this->nobot )  $where[] = 'rc_bot = 0';
-		if ( $this->noanon )  $where[] = 'rc_user > 0';
+		if ( $this->noanon )  $where[] = 'rc_actor > 0';
 		if ( $this->onlypatrolled )  $where[] = 'rc_patrolled != 0';
 		if ( $this->onlynew )  $where[] = 'rc_new = 1';
-		if ( $this->pubtrigger )  $where[] = 'rc_comment LIKE ' . $dbr->addQuotes( '%' . $this->pubtrigger . '%' );
+		// TODO: if ( $this->pubtrigger )  $where[] = 'rc_comment LIKE ' . $dbr->addQuotes( '%' . $this->pubtrigger . '%' );
 
 		if ( $this->namespaces )  $where[] = 'rc_namespace IN ( ' . $dbr->makeList( $this->namespaces ) . ' )';
 		else {
@@ -345,31 +346,31 @@ class NewsRenderer {
 		$news = array();
 
 		if ( $this->recents ) {
-		$remaining = $this->limit;
-		$offset = 0;
-		$ignore = array(); #collect stuff we already have, when in unique mode
+			$remaining = $this->limit;
+			$offset = 0;
+			$ignore = array(); #collect stuff we already have, when in unique mode
 
-		while ( $remaining > 0 ) { #chunk loop for programmatic filter
-			$chunk = $this->unique ? $remaining * 2 : $remaining;
-			$res = $this->query( $dbr, $chunk, $offset );
-			$offset += $chunk;
+			while ( $remaining > 0 ) { #chunk loop for programmatic filter
+				$chunk = $this->unique ? $remaining * 2 : $remaining;
+				$res = $this->query( $dbr, $chunk, $offset );
+				$offset += $chunk;
 
-			$has = false;
-			while ( ( $remaining > 0 ) && ( $row = $res->fetchObject() ) ) {
-				$has = true;
+				$has = false;
+				while ( ( $remaining > 0 ) && ( $row = $res->fetchObject() ) ) {
+					$has = true;
 
-				if ( $this->unique && $row->rc_namespace >= 0 ) {
-					$k = $row->rc_namespace . ':' . $row->rc_title;
-					if ( isset( $ignore[$k] ) ) continue;
-					$ignore[$k] = true;
+					if ( $this->unique && $row->rc_namespace >= 0 ) {
+						$k = $row->rc_namespace . ':' . $row->rc_title;
+						if ( isset( $ignore[$k] ) ) continue;
+						$ignore[$k] = true;
+					}
+
+					$news[] = $row;
+					$remaining -= 1;
 				}
 
-				$news[] = $row;
-				$remaining -= 1;
+				if ( !$has ) break; #empty result set, stop trying
 			}
-
-			if ( !$has ) break; #empty result set, stop trying
-		}
 		}
 
 		if ( $this->wikiforum ) {
@@ -848,11 +849,7 @@ class NewsFeedPage extends Article {
 		//      rendering of textual content
 		if ($user->isAnon() && $usecache) {
 			$cachekey = $this->getCacheKey();
-<<<<<<< HEAD
-			$ocache = MediaWikiServices::getParserCache()->getCacheStorage();
-=======
 			$ocache = MediaWikiServices::getInstance()->getParserCache()->getCacheStorage();
->>>>>>> origin/REL1_39
 			$e = $ocache ? $ocache->get( $cachekey ) : null;
 			$note .= ' anon;';
 			$debug = $e ? "got cached" : "no cached";
